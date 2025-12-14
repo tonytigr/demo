@@ -11,10 +11,15 @@ import com.ctre.phoenix6.swerve.SwerveModuleConstants;
 import com.ctre.phoenix6.swerve.SwerveRequest;
 
 import edu.wpi.first.math.Matrix;
+import edu.wpi.first.math.controller.HolonomicDriveController;
+import edu.wpi.first.math.controller.PIDController;
+import edu.wpi.first.math.controller.ProfiledPIDController;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
+import edu.wpi.first.math.trajectory.TrapezoidProfile;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj.Notifier;
@@ -33,6 +38,19 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
     private static final double kSimLoopPeriod = 0.005; // 5 ms
     private Notifier m_simNotifier = null;
     private double m_lastSimTime;
+
+    // --- Holonomic Drive Controller for Drive-to-Pose ---
+    private final HolonomicDriveController hdc = new HolonomicDriveController(
+        new PIDController(3.0, 0.0, 0.0),   // X controller
+        new PIDController(3.0, 0.0, 0.0),   // Y controller
+        new ProfiledPIDController(
+            4.0, 0.0, 0.0,
+            new TrapezoidProfile.Constraints(
+                Math.PI * 4,     // max angular velocity (rad/s)
+                Math.PI * 8      // max angular accel (rad/s^2)
+            )
+        )
+    );
 
     /* Blue alliance sees forward as 0 degrees (toward red alliance wall) */
     private static final Rotation2d kBlueAlliancePerspectiveRotation = Rotation2d.kZero;
@@ -285,4 +303,41 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
     ) {
         super.addVisionMeasurement(visionRobotPoseMeters, Utils.fpgaToCurrentTime(timestampSeconds), visionMeasurementStdDevs);
     }
+
+    private boolean atPose(Pose2d target) {
+        Pose2d current = this.getState().Pose;
+    
+        boolean posClose =
+            current.getTranslation().getDistance(target.getTranslation()) < 0.05; // 5 cm
+    
+        boolean rotClose =
+            Math.abs(current.getRotation().minus(target.getRotation()).getRadians()) < 0.03; // ~2 deg
+    
+        return posClose && rotClose;
+    }
+    public Command driveToPose(Pose2d targetPose) {
+        SwerveRequest.RobotCentric request = new SwerveRequest.RobotCentric();
+
+        return run(() -> {
+            Pose2d current = this.getState().Pose;
+
+            // Compute chassis speeds using HolonomicDriveController
+            ChassisSpeeds speeds = hdc.calculate(
+                current,
+                targetPose,
+                0.0, // target linear velocity (m/s)
+                targetPose.getRotation()
+            );
+
+            // Apply robot-relative speeds to CTRE swerve
+            this.setControl(
+                request
+                    .withVelocityX(speeds.vxMetersPerSecond)
+                    .withVelocityY(speeds.vyMetersPerSecond)
+                    .withRotationalRate(speeds.omegaRadiansPerSecond)
+            );
+        })
+        .until(() -> atPose(targetPose))
+        .withName("DriveToPose");
+    }    
 }
