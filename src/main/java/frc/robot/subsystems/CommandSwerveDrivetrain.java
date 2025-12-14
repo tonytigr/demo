@@ -1,6 +1,9 @@
 package frc.robot.subsystems;
 
-import static edu.wpi.first.units.Units.*;
+import edu.wpi.first.units.Units.*;
+
+import static edu.wpi.first.units.Units.Second;
+import static edu.wpi.first.units.Units.Volts;
 
 import java.util.function.Supplier;
 
@@ -11,6 +14,7 @@ import com.ctre.phoenix6.swerve.SwerveModuleConstants;
 import com.ctre.phoenix6.swerve.SwerveRequest;
 
 import edu.wpi.first.math.Matrix;
+import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.controller.HolonomicDriveController;
 import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.controller.ProfiledPIDController;
@@ -20,6 +24,7 @@ import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.math.trajectory.TrapezoidProfile;
+import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj.Notifier;
@@ -27,7 +32,7 @@ import edu.wpi.first.wpilibj.RobotController;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Subsystem;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine;
-
+import frc.robot.LimelightHelpers;
 import frc.robot.generated.TunerConstants.TunerSwerveDrivetrain;
 
 /**
@@ -38,19 +43,6 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
     private static final double kSimLoopPeriod = 0.005; // 5 ms
     private Notifier m_simNotifier = null;
     private double m_lastSimTime;
-
-    // --- Holonomic Drive Controller for Drive-to-Pose ---
-    private final HolonomicDriveController hdc = new HolonomicDriveController(
-        new PIDController(3.0, 0.0, 0.0),   // X controller
-        new PIDController(3.0, 0.0, 0.0),   // Y controller
-        new ProfiledPIDController(
-            4.0, 0.0, 0.0,
-            new TrapezoidProfile.Constraints(
-                Math.PI * 4,     // max angular velocity (rad/s)
-                Math.PI * 8      // max angular accel (rad/s^2)
-            )
-        )
-    );
 
     /* Blue alliance sees forward as 0 degrees (toward red alliance wall) */
     private static final Rotation2d kBlueAlliancePerspectiveRotation = Rotation2d.kZero;
@@ -234,6 +226,7 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
         return m_sysIdRoutineToApply.dynamic(direction);
     }
 
+
     @Override
     public void periodic() {
         /*
@@ -304,40 +297,69 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
         super.addVisionMeasurement(visionRobotPoseMeters, Utils.fpgaToCurrentTime(timestampSeconds), visionMeasurementStdDevs);
     }
 
-    private boolean atPose(Pose2d target) {
-        Pose2d current = this.getState().Pose;
-    
-        boolean posClose =
-            current.getTranslation().getDistance(target.getTranslation()) < 0.05; // 5 cm
-    
-        boolean rotClose =
-            Math.abs(current.getRotation().minus(target.getRotation()).getRadians()) < 0.03; // ~2 deg
-    
-        return posClose && rotClose;
+
+    public void estimatePose() {
+        if (DriverStation.isDisabled() || DriverStation.isAutonomous()) {
+        // update rotation only when disabled or in auto
+        LimelightHelpers.PoseEstimate mt1 = LimelightHelpers.getBotPoseEstimate_wpiBlue("limelight");
+        if (mt1 != null) {
+            this.addVisionMeasurement(
+                mt1.pose,
+                mt1.timestampSeconds,
+                VecBuilder.fill(Double.MAX_VALUE, Double.MAX_VALUE, 0.7));
+        }
+        }
+
+        if (Math.abs(this.getState().Speeds.vxMetersPerSecond) < 1
+            && Math.abs(this.getState().Speeds.vyMetersPerSecond) < 1
+            && Math.abs(Units.degreesToRadians(this.getState().Speeds.omegaRadiansPerSecond)) < Math.PI) {
+        // reseed internal IMU gyro given robot is less than 1 m/s
+        LimelightHelpers.SetIMUMode("limelight", 1);
+        } else {
+        LimelightHelpers.SetIMUMode("limelight", 2);
+        // Enable internal IMU when speeds exceed 1 m/s
+        }
+        // update position
+        boolean doRejectUpdate = false;
+        LimelightHelpers.SetRobotOrientation(
+            "limelight",
+            this.getState().Pose.getRotation().getDegrees(),
+            0,
+            0,
+            0,
+            0,
+            0);
+        LimelightHelpers.PoseEstimate mt2 =
+            LimelightHelpers.getBotPoseEstimate_wpiBlue_MegaTag2("limelight");
+        // if our angular velocity is greater than 360 degrees per second, ignore vision updates
+        if (Math.abs(Units.degreesToRadians(this.getState().Speeds.omegaRadiansPerSecond)) > 360) {
+        doRejectUpdate = true;
+        }
+        if (mt2.tagCount == 0) {
+        doRejectUpdate = true;
+        }
+        if (!doRejectUpdate) {
+        this.setVisionMeasurementStdDevs(VecBuilder.fill(.7, .7, Double.MAX_VALUE));
+        this.addVisionMeasurement(mt2.pose, mt2.timestampSeconds);
+        }
     }
-    public Command driveToPose(Pose2d targetPose) {
-        SwerveRequest.RobotCentric request = new SwerveRequest.RobotCentric();
 
-        return run(() -> {
-            Pose2d current = this.getState().Pose;
 
-            // Compute chassis speeds using HolonomicDriveController
-            ChassisSpeeds speeds = hdc.calculate(
-                current,
-                targetPose,
-                0.0, // target linear velocity (m/s)
-                targetPose.getRotation()
-            );
+    private PIDController rotController = new PIDController(4, 0, 0);
+    private PIDController xYvController = new PIDController(4, 0, 1);
+    public Command autoAlign(Pose2d targetPose) {
+        rotController.enableContinuousInput(0, 2*Math.PI);
+        xYvController.setTolerance(0.1,0.01); // Distance & Velocity
+        SwerveRequest.FieldCentric alignRequest = new SwerveRequest.FieldCentric();
+        return applyRequest(() -> {
+            double distanceError = targetPose.getTranslation().getDistance(this.getState().Pose.getTranslation());
+            double velocity = xYvController.calculate(distanceError,0);
+            double angle = targetPose.getTranslation().minus(this.getState().Pose.getTranslation()).getAngle().getRadians();
+            double angleVel = rotController.calculate(this.getState().Pose.getRotation().getDegrees(),targetPose.getRotation().getRadians());
+            return alignRequest.withVelocityX(Math.cos(angle)*velocity).withVelocityY(Math.sin(angle)*velocity).withRotationalRate(angleVel);
 
-            // Apply robot-relative speeds to CTRE swerve
-            this.setControl(
-                request
-                    .withVelocityX(speeds.vxMetersPerSecond)
-                    .withVelocityY(speeds.vyMetersPerSecond)
-                    .withRotationalRate(speeds.omegaRadiansPerSecond)
-            );
         })
-        .until(() -> atPose(targetPose))
+        .until(() -> xYvController.getError() < 0.1 )
         .withName("DriveToPose");
     }    
 }
