@@ -5,6 +5,7 @@ import edu.wpi.first.units.Units.*;
 import static edu.wpi.first.units.Units.Second;
 import static edu.wpi.first.units.Units.Volts;
 
+import java.util.Arrays;
 import java.util.function.Supplier;
 
 import com.ctre.phoenix6.SignalLogger;
@@ -20,6 +21,7 @@ import edu.wpi.first.math.controller.PIDController;
 import edu.wpi.first.math.controller.ProfiledPIDController;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.math.numbers.N1;
 import edu.wpi.first.math.numbers.N3;
@@ -34,6 +36,8 @@ import edu.wpi.first.wpilibj2.command.Subsystem;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine;
 import frc.robot.LimelightHelpers;
 import frc.robot.generated.TunerConstants.TunerSwerveDrivetrain;
+import com.pathplanner.lib.util.FlippingUtil;
+
 
 /**
  * Class that extends the Phoenix 6 SwerveDrivetrain class and implements
@@ -236,6 +240,7 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
          * Otherwise, only check and apply the operator perspective if the DS is disabled.
          * This ensures driving behavior doesn't change until an explicit disable event occurs during testing.
          */
+        estimatePose();
         if (!m_hasAppliedOperatorPerspective || DriverStation.isDisabled()) {
             DriverStation.getAlliance().ifPresent(allianceColor -> {
                 setOperatorPerspectiveForward(
@@ -298,6 +303,8 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
     }
 
 
+
+
     public void estimatePose() {
         if (DriverStation.isDisabled() || DriverStation.isAutonomous()) {
         // update rotation only when disabled or in auto
@@ -343,6 +350,60 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
         this.addVisionMeasurement(mt2.pose, mt2.timestampSeconds);
         }
     }
+
+    public enum branchSide{
+        leftBranch,
+        rightBranch
+      }
+    
+      public enum coralSide{
+            leftCoral,
+            rightCoral
+        }
+    
+      
+      public Pose2d[] leftBranchPosesBlue = new Pose2d[6];
+      public Pose2d[] rightBranchPosesBlue = new Pose2d[6];
+    
+      public Pose2d[] leftBranchPosesRed = new Pose2d[6];
+      public Pose2d[] rightBranchPosesRed = new Pose2d[6];
+
+    public void generatePoseArray() {
+        Pose2d lOrgBlue = new Pose2d(3.17, 4.17, new Rotation2d(0));
+        Pose2d rOrgBlue = new Pose2d(3.17, 3.84, new Rotation2d(0));
+        Translation2d centerBlue = new Translation2d(4.497, 4.025);
+
+        Pose2d lOrgRed = FlippingUtil.flipFieldPose(lOrgBlue);
+        Pose2d rOrgRed = FlippingUtil.flipFieldPose(rOrgBlue);
+        Translation2d centerRed = FlippingUtil.flipFieldPosition(centerBlue);
+
+        for (int i = 0; i < 6; i += 1) {
+        var rotAngle = Rotation2d.fromDegrees(60 * i);
+        leftBranchPosesBlue[i] = lOrgBlue.rotateAround(centerBlue, rotAngle);
+        rightBranchPosesBlue[i] = rOrgBlue.rotateAround(centerBlue, rotAngle);
+        leftBranchPosesRed[i] = lOrgRed.rotateAround(centerRed, rotAngle);
+        rightBranchPosesRed[i] = rOrgRed.rotateAround(centerRed, rotAngle);
+        }
+    }
+
+    public Pose2d getBranchPose(branchSide bs) {
+        Pose2d finalPose = new Pose2d();
+        if(bs == branchSide.leftBranch) {
+        finalPose = this.getState().Pose.nearest(Arrays.asList(isRedAlliance() ? leftBranchPosesRed : leftBranchPosesBlue));
+        }
+        else{
+        finalPose = this.getState().Pose.nearest(Arrays.asList(isRedAlliance() ? rightBranchPosesRed : rightBranchPosesBlue));
+        }
+
+        return finalPose; 
+    }
+
+    private boolean isRedAlliance() {
+        var alliance = DriverStation.getAlliance();
+        return alliance.isPresent() ? alliance.get() == DriverStation.Alliance.Red : false;
+    }
+
+
 
 
     private PIDController rotController = new PIDController(4, 0, 0);
