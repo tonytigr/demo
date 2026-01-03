@@ -29,6 +29,7 @@ import edu.wpi.first.math.trajectory.TrapezoidProfile;
 import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj.Notifier;
 import edu.wpi.first.wpilibj.RobotController;
 import edu.wpi.first.wpilibj2.command.Command;
@@ -140,7 +141,6 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
         if (Utils.isSimulation()) {
             startSimThread();
         }
-        generatePoseArray();
     }
 
     /**
@@ -310,7 +310,7 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
         if (DriverStation.isDisabled() || DriverStation.isAutonomous()) {
         // update rotation only when disabled or in auto
         LimelightHelpers.PoseEstimate mt1 = LimelightHelpers.getBotPoseEstimate_wpiBlue("limelight");
-        if (mt1 != null) {
+        if (mt1 != null && LimelightHelpers.getTV("limelight")) {
             this.addVisionMeasurement(
                 mt1.pose,
                 mt1.timestampSeconds,
@@ -339,89 +339,54 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
             0);
         LimelightHelpers.PoseEstimate mt2 =
             LimelightHelpers.getBotPoseEstimate_wpiBlue_MegaTag2("limelight");
-        // if our angular velocity is greater than 360 degrees per second, ignore vision updates
-        if (Math.abs(Units.degreesToRadians(this.getState().Speeds.omegaRadiansPerSecond)) > 360) {
-        doRejectUpdate = true;
-        }
-        if (mt2.tagCount == 0) {
-        doRejectUpdate = true;
-        }
-        if (!doRejectUpdate) {
-        this.setVisionMeasurementStdDevs(VecBuilder.fill(.7, .7, Double.MAX_VALUE));
-        this.addVisionMeasurement(mt2.pose, mt2.timestampSeconds);
-        }
-    }
-
-    public enum branchSide{
-        leftBranch,
-        rightBranch
-      }
-    
-      public enum coralSide{
-            leftCoral,
-            rightCoral
-        }
-    
-      
-      public Pose2d[] leftBranchPosesBlue = new Pose2d[6];
-      public Pose2d[] rightBranchPosesBlue = new Pose2d[6];
-    
-      public Pose2d[] leftBranchPosesRed = new Pose2d[6];
-      public Pose2d[] rightBranchPosesRed = new Pose2d[6];
-
-    public void generatePoseArray() {
-        Pose2d lOrgBlue = new Pose2d(3.17, 4.17, new Rotation2d(0));
-        Pose2d rOrgBlue = new Pose2d(3.17, 3.84, new Rotation2d(0));
-        Translation2d centerBlue = new Translation2d(4.497, 4.025);
-
-        Pose2d lOrgRed = FlippingUtil.flipFieldPose(lOrgBlue);
-        Pose2d rOrgRed = FlippingUtil.flipFieldPose(rOrgBlue);
-        Translation2d centerRed = FlippingUtil.flipFieldPosition(centerBlue);
-
-        for (int i = 0; i < 6; i += 1) {
-        var rotAngle = Rotation2d.fromDegrees(60 * i);
-        leftBranchPosesBlue[i] = lOrgBlue.rotateAround(centerBlue, rotAngle);
-        rightBranchPosesBlue[i] = rOrgBlue.rotateAround(centerBlue, rotAngle);
-        leftBranchPosesRed[i] = lOrgRed.rotateAround(centerRed, rotAngle);
-        rightBranchPosesRed[i] = rOrgRed.rotateAround(centerRed, rotAngle);
+        if (mt2 != null){
+            // if our angular velocity is greater than 360 degrees per second, ignore vision updates
+            if (Math.abs(Units.degreesToRadians(this.getState().Speeds.omegaRadiansPerSecond)) > 360) {
+            doRejectUpdate = true;
+            }
+            if (mt2.tagCount == 0 || mt2 == null) {
+            doRejectUpdate = true;
+            }
+            if (!doRejectUpdate) {
+            this.setVisionMeasurementStdDevs(VecBuilder.fill(.7, .7, Double.MAX_VALUE));
+            this.addVisionMeasurement(mt2.pose, mt2.timestampSeconds);
+            }
         }
     }
 
-    public Pose2d getBranchPose(branchSide bs) {
-        Pose2d finalPose = new Pose2d();
-        if(bs == branchSide.leftBranch) {
-        finalPose = this.getState().Pose.nearest(Arrays.asList(isRedAlliance() ? leftBranchPosesRed : leftBranchPosesBlue));
-        }
-        else{
-        finalPose = this.getState().Pose.nearest(Arrays.asList(isRedAlliance() ? rightBranchPosesRed : rightBranchPosesBlue));
-        }
-
-        return finalPose; 
+    public Pose2d pose1(){
+        return new Pose2d(3,2,Rotation2d.fromDegrees(90));
     }
 
-    private boolean isRedAlliance() {
-        var alliance = DriverStation.getAlliance();
-        return alliance.isPresent() ? alliance.get() == DriverStation.Alliance.Red : false;
+    public double getDistanceError(){
+        System.out.println(Math.abs(xYvController.getError()));
+        return Math.abs(xYvController.getError());
     }
-
 
 
 
     private PIDController rotController = new PIDController(4, 0, 0);
-    private PIDController xYvController = new PIDController(4, 0, 1);
+    private PIDController xYvController = new PIDController(4, 0, 0);
     public Command autoAlign(Pose2d targetPose) {
+        double distanceErrorInit = targetPose.getTranslation().getDistance(this.getState().Pose.getTranslation());
+        xYvController.calculate(distanceErrorInit,0);
+
         rotController.enableContinuousInput(0, 2*Math.PI);
-        xYvController.setTolerance(0.1,0.01); // Distance & Velocity
+        xYvController.setTolerance(0.1,0); // Distance & Velocity
         SwerveRequest.FieldCentric alignRequest = new SwerveRequest.FieldCentric();
         return applyRequest(() -> {
             double distanceError = targetPose.getTranslation().getDistance(this.getState().Pose.getTranslation());
-            double velocity = xYvController.calculate(distanceError,0);
-            double angle = targetPose.getTranslation().minus(this.getState().Pose.getTranslation()).getAngle().getRadians();
-            double angleVel = rotController.calculate(this.getState().Pose.getRotation().getDegrees(),targetPose.getRotation().getRadians());
+            double velocity = -xYvController.calculate(distanceError,0);
+            double angle = (targetPose.getTranslation().minus(this.getState().Pose.getTranslation())).getAngle().getRadians();
+            double angleVel = -rotController.calculate(this.getState().Pose.getRotation().getRadians(),targetPose.getRotation().getRadians());
+            SmartDashboard.putNumber("Distance Error", distanceError);
+            SmartDashboard.putNumber("velocity", velocity);
+            SmartDashboard.putNumber("angle", Math.toDegrees(angle));
+            SmartDashboard.putNumber("targetANgle", targetPose.getRotation().getDegrees());
+            SmartDashboard.putNumber("angleVel", Math.toDegrees(angleVel));
             return alignRequest.withVelocityX(Math.cos(angle)*velocity).withVelocityY(Math.sin(angle)*velocity).withRotationalRate(angleVel);
 
         })
-        .until(() -> xYvController.getError() < 0.1 )
         .withName("DriveToPose");
     }    
 }

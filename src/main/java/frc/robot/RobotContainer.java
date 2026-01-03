@@ -9,17 +9,19 @@ import static edu.wpi.first.units.Units.*;
 import com.ctre.phoenix6.swerve.SwerveModule.DriveRequestType;
 import com.ctre.phoenix6.swerve.SwerveRequest;
 
+import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.wpilibj.event.BooleanEvent;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
+import edu.wpi.first.wpilibj2.command.RunCommand;
+import edu.wpi.first.wpilibj2.command.SequentialCommandGroup;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 import edu.wpi.first.wpilibj2.command.button.RobotModeTriggers;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
 import frc.robot.generated.TunerConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
-import frc.robot.subsystems.CommandSwerveDrivetrain.branchSide;
-
 public class RobotContainer {
     private double MaxSpeed = TunerConstants.kSpeedAt12Volts.in(MetersPerSecond); // kSpeedAt12Volts desired top speed
     private double MaxAngularRate = RotationsPerSecond.of(0.75).in(RadiansPerSecond); // 3/4 of a rotation per second max angular velocity
@@ -49,7 +51,7 @@ public class RobotContainer {
             drivetrain.applyRequest(() ->
                 drive.withVelocityX(-joystick.getLeftY() * MaxSpeed) // Drive forward with negative Y (forward)
                     .withVelocityY(-joystick.getLeftX() * MaxSpeed) // Drive left with negative X (left)
-                    .withRotationalRate(-joystick.getRightX() * MaxAngularRate) // Drive counterclockwise with negative X (left)
+                    .withRotationalRate(joystick.getRightX() * MaxAngularRate) // Drive counterclockwise with negative X (left)
             )
         );
 
@@ -65,8 +67,8 @@ public class RobotContainer {
             point.withModuleDirection(new Rotation2d(-joystick.getLeftY(), -joystick.getLeftX()))
         ));
 
-        joystick.leftTrigger().whileTrue(drivetrain.autoAlign(drivetrain.getBranchPose(branchSide.leftBranch)));
-        joystick.rightTrigger().whileTrue(drivetrain.autoAlign(drivetrain.getBranchPose(branchSide.leftBranch)));
+        joystick.leftTrigger().whileTrue(drivetrain.autoAlign(drivetrain.pose1()));
+        joystick.rightTrigger().whileTrue(drivetrain.autoAlign(drivetrain.pose1()));
 
 
         // Run SysId routines when holding back/start and X/Y.
@@ -83,6 +85,19 @@ public class RobotContainer {
     }
 
     public Command getAutonomousCommand() {
-        return Commands.print("No autonomous command configured");
+        return auto1();
+    }
+
+    public Command auto1(){
+        Pose2d point1 = new Pose2d(1.3,5,Rotation2d.fromDegrees(90));
+        Pose2d point2 = new Pose2d(4.5,1.3,Rotation2d.fromDegrees(0));
+        Pose2d point3 = new Pose2d(6,1.4,Rotation2d.fromDegrees(180));
+        return new SequentialCommandGroup(
+            drivetrain.autoAlign(point1).until(()->drivetrain.getDistanceError()<1),
+            drivetrain.autoAlign(point2).until(()->drivetrain.getDistanceError()<0.5),
+            drivetrain.autoAlign(point3).until(()->drivetrain.getDistanceError()<0.1)
+
+        );
+
     }
 }
